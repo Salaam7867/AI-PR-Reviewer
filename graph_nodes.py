@@ -1,6 +1,23 @@
 
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+from groq import Groq
+
 from graph_state import ReviewState
 from linter_tool import run_linter
+from review_schema import CodeReview
+
+
+load_dotenv()
+
+api_key = os.getenv("GROQ_API_KEY")
+
+if not api_key:
+    raise ValueError("GROQ_API_KEY is missing from .env")
+
+client = Groq(api_key=api_key)
 
 
 def linter_node(state: ReviewState) -> dict:
@@ -10,16 +27,54 @@ def linter_node(state: ReviewState) -> dict:
     return {"lint_report": lint_report}
 
 
-if __name__ == "__main__":
-    test_state = {
-        "file_path": "sample.py",
-        "source_code": "",
-        "lint_report": "",
-        "ai_review": None,
-        "verification_report": {},
-    }
+def reviewer_node(state: ReviewState) -> dict:
+    source_code = Path(state["file_path"]).read_text(
+        encoding="utf-8"
+    )
+    lint_report = state["lint_report"]
 
-    result = linter_node(test_state)
+    prompt = f"""
+Review the following Python code and its Flake8 report.
 
-    print("LINTER NODE OUTPUT:")
-    print(result)
+Identify potential issues in these categories:
+1. Bugs
+2. Security
+3. Code hygiene
+
+Do not invent issues unsupported by the code.
+Distinguish confirmed problems from potential risks.
+
+PYTHON CODE:
+{source_code}
+
+FLAKE8 REPORT:
+{lint_report}
+"""
+
+    response = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a Python code reviewer. Return a JSON "
+                    "object with bugs, security, and code_hygiene "
+                    "arrays. Each finding must contain description, "
+                    "location, and severity. Severity must be "
+                    "low, medium, high, or potential."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+        response_format={"type": "json_object"},
+    )
+
+    review_json = response.choices[0].message.content
+
+    if not review_json:
+        raise ValueError("Groq returned an empty review.")
+
+    validated_review = CodeReview.model_validate_json(review_json)
+
+    return {"ai_review": validated_review}
