@@ -32,16 +32,31 @@ def reviewer_node(state: ReviewState) -> dict:
     source_code = state["source_code"]
     lint_report = state["lint_report"]
 
+    
     prompt = f"""
 Review the following Python code and its Flake8 report.
 
-Identify potential issues in these categories:
+Identify issues in these categories:
 1. Bugs
 2. Security
 3. Code hygiene
 
-Do not invent issues unsupported by the code.
-Distinguish confirmed problems from potential risks.
+For every finding:
+- Describe the issue accurately.
+- Give its location in the source code.
+- Assign severity: low, medium, high, or potential.
+- Provide a specific suggested_fix when a safe, actionable fix is possible.
+- If no safe fix is appropriate, set suggested_fix to null.
+
+Rules:
+- Do not invent issues unsupported by the code.
+- Distinguish confirmed bugs from potential risks.
+- Do not treat style preferences as bugs.
+- Avoid duplicate findings.
+- Prefer minimal changes that preserve existing behavior.
+- Do not claim a fix is tested or verified.
+
+Return findings using the required JSON schema.
 
 PYTHON CODE:
 {source_code}
@@ -50,21 +65,32 @@ FLAKE8 REPORT:
 {lint_report}
 """
 
+
     response = client.chat.completions.create(
         model="openai/gpt-oss-20b",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a Python code reviewer. Return a JSON "
-                    "object with bugs, security, and code_hygiene "
-                    "arrays. Each finding must contain description, "
-                    "location, and severity. Severity must be "
-                    "low, medium, high, or potential."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
+        
+messages=[
+    {
+        "role": "system",
+        "content": """
+Return only a valid JSON object with exactly these top-level keys:
+bugs, security, code_hygiene.
+
+Each key must contain an array of findings.
+
+Each finding must have:
+- description: string
+- location: string
+- severity: one of "low", "medium", "high", "potential"
+- suggested_fix: string or null
+
+If a category has no findings, return an empty array.
+Do not include Markdown fences or text outside the JSON object.
+"""
+    },
+    {"role": "user", "content": prompt},
+],
+
         temperature=0.2,
         response_format={"type": "json_object"},
     )
