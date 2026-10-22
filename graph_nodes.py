@@ -27,10 +27,9 @@ def linter_node(state: ReviewState) -> dict:
     return {"lint_report": lint_report}
 
 
+
 def reviewer_node(state: ReviewState) -> dict:
-    source_code = Path(state["file_path"]).read_text(
-        encoding="utf-8"
-    )
+    source_code = state["source_code"]
     lint_report = state["lint_report"]
 
     prompt = f"""

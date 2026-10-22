@@ -1,6 +1,6 @@
 
 from langgraph.graph import StateGraph, START, END
-
+from pathlib import Path
 from graph_state import ReviewState
 from graph_nodes import linter_node, reviewer_node
 
@@ -19,12 +19,17 @@ graph = builder.compile()
 
 
 if __name__ == "__main__":
+    source_code = Path("sample.py").read_text(encoding="utf-8")
+
     initial_state = {
         "file_path": "sample.py",
-        "source_code": "",
+        "original_source_code": source_code,
+        "source_code": source_code,
         "lint_report": "",
         "ai_review": None,
-        "verification_report": {},
+        "fix_attempts": 0,
+        "test_report": "",
+        "final_status": "in_progress",
     }
 
     result = graph.invoke(initial_state)
