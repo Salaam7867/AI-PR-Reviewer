@@ -90,22 +90,3 @@ builder.add_edge("finalize", END)
 
 graph = builder.compile()
 
-
-if __name__ == "__main__":
-    source_code = Path("sample.py").read_text(encoding="utf-8")
-
-    initial_state = {
-        "file_path": "sample.py",
-        "original_source_code": source_code,
-        "source_code": source_code,
-        "lint_report": "",
-        "ai_review": None,
-        "fix_attempts": 0,
-        "test_report": "",
-        "final_status": "in_progress",
-    }
-
-    result = graph.invoke(initial_state)
-
-    print("FINAL GRAPH STATE:")
-    print(result)

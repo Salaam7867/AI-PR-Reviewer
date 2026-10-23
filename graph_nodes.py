@@ -44,56 +44,47 @@ def linter_node(state: ReviewState) -> dict:
 def reviewer_node(state: ReviewState) -> dict:
     source_code = state["source_code"]
     lint_report = state["lint_report"]
+    # You will need to add git_diff to your ReviewState typed dict
+    git_diff = state.get("git_diff", "No diff provided.") 
 
-    
     prompt = f"""
-        Review the following Python code and its Flake8 report.
+        You are a Pull Request Reviewer. 
 
-        Identify issues in these categories:
-        1. Bugs
-        2. Security
-        3. Code hygiene
-
-        For every finding:
-        - Describe the issue accurately.
-        - Give its location in the source code.
-        - Assign severity: low, medium, high, or potential.
-        - Provide a specific suggested_fix when a safe, actionable fix is possible.
-        - If no safe fix is appropriate, set suggested_fix to null.
-
+        Your strict task is to identify Bugs, Security risks, and Code Hygiene issues ONLY in the newly modified code.
+        
         Rules:
-        - Do not invent issues unsupported by the code.
-        - Distinguish confirmed bugs from potential risks.
-        - Do not treat style preferences as bugs.
-        - Avoid duplicate findings.
-        - Prefer minimal changes that preserve existing behavior.
-        - Do not claim a fix is tested or verified.
+        1. ONLY critique lines that were added or modified in the GIT DIFF (lines starting with +).
+        2. Do NOT report issues in existing legacy code that was not changed by this PR.
+        3. Use the FULL PYTHON CODE purely as background context to understand how the new changes interact with the rest of the file.
+        4. For every finding, provide a specific suggested_fix when a safe, actionable fix is possible.
+        5. Return findings using the required JSON schema.
 
-        Return findings using the required JSON schema.
+        GIT DIFF (The actual changes to review):
+        {git_diff}
 
-        PYTHON CODE:
+        FULL PYTHON CODE (For background context only):
         {source_code}
 
-        FLAKE8 REPORT:
+        FLAKE8 REPORT (Syntactical errors):
         {lint_report}
         """
 
-
     response = client.chat.completions.create(
-        model="openai/gpt-oss-120b",
-            
-    messages=[
-        {
-            "role": "system",
-            "content": 
-"Return a valid JSON object with exactly three keys: bugs, security, and code_hygiene. Each key must contain an array. Each finding must contain description (string), location (string), severity (one of low, medium, high, potential), and suggested_fix (string or null). Use empty arrays when there are no findings. Return JSON only."
-
-        },
-        {"role": "user", "content": prompt},
-    ],
-
-            temperature=0.2,
-            response_format={"type": "json_object"},
+        model="gpt-oss-120b", # Note: gpt-oss-120b will throw an error on Groq
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Return a valid JSON object with exactly three keys: bugs, security, and code_hygiene. "
+                    "Each key must contain an array. Each finding must contain description (string), "
+                    "location (string), severity (one of low, medium, high, potential), and suggested_fix (string or null). "
+                    "Use empty arrays when there are no findings. Return raw JSON only."
+                )
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.1,
+        response_format={"type": "json_object"},
     )
 
     review_json = response.choices[0].message.content
