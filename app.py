@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import difflib
 import re
+import concurrent.futures
 from dotenv import load_dotenv
 from github_service import fetch_pr_python_files
 from graph import graph
@@ -30,8 +31,32 @@ def get_pr_modified_lines(patch: str) -> set:
             current_line += 1
     return modified
 
+def process_file_agent(file_data: dict) -> tuple:
+    """Headless worker function that runs the LangGraph agent without UI blocking."""
+    source_code = file_data['content']
+    git_diff = file_data['patch'] or "No diff available." 
+    
+    pr_allowed_lines = get_pr_modified_lines(git_diff)
+    
+    initial_state = {
+        "file_path": file_data['filename'],
+        "original_source_code": source_code,
+        "source_code": source_code,
+        "git_diff": git_diff,  
+        "lint_report": "",
+        "ai_review": None,
+        "fix_attempts": 0,
+        "test_report": "",
+        "final_status": "in_progress",
+    }
+
+    # Invoke the graph headlessly
+    result = graph.invoke(initial_state)
+    return file_data, result, pr_allowed_lines
+
+
 st.title("🤖 Agentic AI PR Reviewer")
-st.markdown("Paste a GitHub Pull Request URL to run the autonomous review and auto-fix loop.")
+st.markdown("Paste a GitHub Pull Request URL to run the autonomous review and auto-fix loop concurrently.")
 
 pr_url = st.text_input("GitHub PR URL", placeholder="https://github.com/username/repo/pull/1")
 
@@ -55,32 +80,21 @@ if st.button("Run PR Review"):
         st.info("No Python files were modified in this PR.")
         st.stop()
 
-    for file_data in changed_files:
+    # --- PARALLEL EXECUTION PHASE ---
+    with st.status(f"Spawning {len(changed_files)} agents concurrently...", expanded=True) as status:
+        st.write("Executing Linter & LLM Reviews in parallel...")
+        
+        # ThreadPoolExecutor launches a thread for every file simultaneously
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            completed_results = list(executor.map(process_file_agent, changed_files))
+            
+        status.update(label="All Concurrent Reviews Complete!", state="complete", expanded=False)
+
+    # --- SEQUENTIAL UI RENDERING PHASE ---
+    for file_data, result, pr_allowed_lines in completed_results:
+        st.divider()
         st.subheader(f"Reviewing: `{file_data['filename']}`")
         
-        source_code = file_data['content']
-        git_diff = file_data['patch'] or "No diff available." 
-        
-        # 1. Create the boundary map of what the PR actually touched
-        pr_allowed_lines = get_pr_modified_lines(git_diff)
-        
-        initial_state = {
-            "file_path": file_data['filename'],
-            "original_source_code": source_code,
-            "source_code": source_code,
-            "git_diff": git_diff,  
-            "lint_report": "",
-            "ai_review": None,
-            "fix_attempts": 0,
-            "test_report": "",
-            "final_status": "in_progress",
-        }
-
-        with st.status(f"Running Agent Loop on {file_data['filename']}...", expanded=True) as status:
-            st.write("Executing Linter & LLM Review...")
-            result = graph.invoke(initial_state)
-            status.update(label="Review Complete!", state="complete", expanded=False)
-
         col1, col2 = st.columns(2)
         
         with col1:
@@ -96,27 +110,18 @@ if st.button("Run PR Review"):
         with col2:
             st.markdown("### 🛠️ Suggested Auto-Fix")
             
-            # ---> THE STRICT GUARDRAIL LOGIC <---
             original_lines = file_data['content'].splitlines()
             ai_lines = result["source_code"].splitlines()
             
-            # We will build the FINAL safe file here
             safe_final_lines = original_lines.copy()
-            
-            # Use SequenceMatcher to find exactly which blocks of code the AI altered
             matcher = difflib.SequenceMatcher(None, original_lines, ai_lines)
             
             for tag, i1, i2, j1, j2 in matcher.get_opcodes():
                 if tag != 'equal':
-                    # i1 to i2 is the original line range. 
-                    # If ANY line in this altered block was part of the PR, we accept the AI's fix.
-                    # Otherwise, we reject it because it's a rogue legacy formatting change.
                     block_overlaps_pr = any(line_num in pr_allowed_lines for line_num in range(i1 + 1, i2 + 2))
-                    
                     if block_overlaps_pr:
                         safe_final_lines[i1:i2] = ai_lines[j1:j2]
 
-            # Generate the unified diff strictly between the original file and our SAFE file
             diff = list(difflib.unified_diff(original_lines, safe_final_lines, lineterm="", n=2))
 
             if diff:
