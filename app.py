@@ -85,7 +85,7 @@ if st.button("Run PR Review"):
         st.write("Executing Linter & LLM Reviews in parallel...")
         
         # ThreadPoolExecutor launches a thread for every file simultaneously
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             completed_results = list(executor.map(process_file_agent, changed_files))
             
         status.update(label="All Concurrent Reviews Complete!", state="complete", expanded=False)

@@ -15,7 +15,8 @@ from graph_state import ReviewState
 from linter_tool import run_linter
 from review_schema import CodeReview
 
-load_dotenv()
+from dotenv import load_dotenv
+load_dotenv(override=True) # Forces Python to read the new key from the file
 
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
