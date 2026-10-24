@@ -6,7 +6,10 @@ import tempfile
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+import logging
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception, before_sleep_log
+
+from google.genai.errors import APIError
 
 from graph_state import ReviewState
 from linter_tool import run_linter
@@ -18,11 +21,21 @@ api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
     raise ValueError("GEMINI_API_KEY is missing from .env")
 
+# Setup the logger so tenacity knows where to print the errors
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("GeminiRetry")
+
+def is_transient_error(exception):
+    # If it's a Google API error and the code is 429 (Quota), DO NOT retry.
+    if isinstance(exception, APIError) and exception.code == 429:
+        return False
+    return True # Retry everything else
 
 @retry(
-    retry=retry_if_exception_type(Exception),
-    wait=wait_exponential(multiplier=2, min=4, max=60), # Wait 4s, 8s, 16s, up to 60s
-    stop=stop_after_attempt(10) # Give Google 10 chances to respond
+    retry=retry_if_exception(is_transient_error),
+    wait=wait_exponential(multiplier=2, min=2, max=10),
+    stop=stop_after_attempt(3),
+    before_sleep=before_sleep_log(logger, logging.WARNING)
 )
 def safe_gemini_call(prompt: str, is_json: bool = False) -> str:
     # The new SDK uses a centralized Client object
