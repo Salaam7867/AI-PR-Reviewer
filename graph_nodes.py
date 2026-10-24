@@ -1,12 +1,12 @@
 import os
 import re
+import ast
 from pathlib import Path
 import tempfile
 from dotenv import load_dotenv
 import google.generativeai as genai
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
-# Your local imports remain exactly the same
 from graph_state import ReviewState
 from linter_tool import run_linter
 from review_schema import CodeReview
@@ -19,28 +19,21 @@ if not api_key:
 
 genai.configure(api_key=api_key)
 
-# --- ANTI-CRASH RETRY LOGIC (Prevents 504s, 503s, and 429s) ---
 @retry(
     retry=retry_if_exception_type(Exception),
-    wait=wait_exponential(multiplier=2, min=2, max=30), # Waits 2s, 4s, 8s...
+    wait=wait_exponential(multiplier=2, min=2, max=30),
     stop=stop_after_attempt(5)
 )
 def safe_gemini_call(prompt: str, is_json: bool = False) -> str:
-    """Calls Gemini API safely with automatic exponential backoff."""
     config = genai.GenerationConfig(temperature=0.1)
-    
     if is_json:
-        # Gemini 1.5 Flash natively guarantees perfectly structured JSON
         config.response_mime_type = "application/json"
         
     model = genai.GenerativeModel('gemini-1.5-flash')
     response = model.generate_content(prompt, generation_config=config)
     return response.text
 
-
-# --- HELPER FUNCTIONS ---
 def get_modified_lines(git_diff: str) -> set:
-    """Parses a git diff patch and returns a set of newly added/modified line numbers."""
     modified_lines = set()
     if not git_diff or git_diff == "No diff available.":
         return modified_lines
@@ -61,11 +54,9 @@ def get_modified_lines(git_diff: str) -> set:
             
     return modified_lines
 
-
 def filter_lint_report(lint_report: str, modified_lines: set) -> str:
-    """Filters the Flake8 report to only include errors on modified lines."""
     if not modified_lines:
-        return "No issues found in the PR diff."
+        return "Unable to filter lint findings: no modified lines were identified."
         
     filtered_errors = []
     for issue in lint_report.strip().splitlines():
@@ -77,8 +68,6 @@ def filter_lint_report(lint_report: str, modified_lines: set) -> str:
                 
     return "\n".join(filtered_errors) if filtered_errors else "No issues found in the PR diff."
 
-
-# --- LANGGRAPH NODES ---
 def linter_node(state: ReviewState) -> dict:
     source_code = state["source_code"]
 
@@ -101,7 +90,6 @@ def linter_node(state: ReviewState) -> dict:
     targeted_lint_report = filter_lint_report(lint_report, modified_lines)
 
     return {"lint_report": targeted_lint_report}
-
 
 def reviewer_node(state: ReviewState) -> dict:
     source_code = state["source_code"]
@@ -130,27 +118,19 @@ def reviewer_node(state: ReviewState) -> dict:
         {lint_report}
         """
 
-    try:
-        review_json = safe_gemini_call(prompt, is_json=True)
-        if not review_json:
-            raise ValueError("Gemini returned an empty review.")
+    review_json = safe_gemini_call(prompt, is_json=True)
+    if not review_json:
+        raise ValueError("Gemini returned an empty review. Halting pipeline to prevent false passes.")
 
-        validated_review = CodeReview.model_validate_json(review_json)
-        return {"ai_review": validated_review}
-        
-    except Exception as e:
-        print(f"Error in Reviewer Node: {e}")
-        # Fallback to an empty review if the LLM completely fails, so the pipeline doesn't crash
-        return {"ai_review": None}
-
+    validated_review = CodeReview.model_validate_json(review_json)
+    return {"ai_review": validated_review}
 
 def fixer_node(state: ReviewState) -> dict:
     source_code = state["source_code"]
     ai_review = state["ai_review"]
 
     if not ai_review or not (ai_review.bugs or ai_review.security or ai_review.code_hygiene):
-        # No issues found, just pass the original code through
-        return {"source_code": source_code, "fix_attempts": state["fix_attempts"] + 1}
+        return {"source_code": source_code, "fix_attempts": state["fix_attempts"]}
 
     review_json = ai_review.model_dump_json(indent=2)
 
@@ -176,7 +156,6 @@ def fixer_node(state: ReviewState) -> dict:
     try:
         fixed_code = safe_gemini_call(prompt, is_json=False)
         
-        # Clean up any rogue markdown fences Gemini might sneak in
         if fixed_code.startswith("```python"):
             fixed_code = fixed_code[9:]
         if fixed_code.startswith("```"):
@@ -186,9 +165,16 @@ def fixer_node(state: ReviewState) -> dict:
 
         fixed_code = fixed_code.strip() + "\n"
         
+        # AST Validation: Ensure the AI didn't write broken Python syntax
+        try:
+            ast.parse(fixed_code)
+        except SyntaxError as e:
+            print(f"AST Validation Failed: AI generated invalid Python syntax - {e}")
+            fixed_code = source_code # Revert to original if syntax is broken
+            
     except Exception as e:
         print(f"Error in Fixer Node: {e}")
-        fixed_code = source_code # Fallback to original code if LLM fails
+        fixed_code = source_code
 
     return {
         "source_code": fixed_code,
