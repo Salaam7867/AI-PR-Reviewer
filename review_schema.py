@@ -7,12 +7,29 @@ class ReviewFinding(BaseModel):
     severity: Literal["low", "medium", "high", "potential"]
     suggested_fix: str | None = None
 
-    # This intercepts the AI's output and forces it to lowercase before validation
+    # This intercepts the AI's output, fixes casing, and maps synonyms
     @field_validator('severity', mode='before')
     @classmethod
-    def lowercase_severity(cls, v):
+    def normalize_severity(cls, v):
         if isinstance(v, str):
-            return v.lower()
+            val = v.lower().strip()
+            
+            # Map common AI hallucinations to our strict schema
+            synonyms = {
+                'minor': 'low',
+                'info': 'low',
+                'warning': 'medium',
+                'critical': 'high',
+                'severe': 'high'
+            }
+            if val in synonyms:
+                return synonyms[val]
+                
+            # If it invents a totally random word, default to 'potential' to prevent a crash
+            if val not in ['low', 'medium', 'high', 'potential']:
+                return 'potential'
+                
+            return val
         return v
 
 
