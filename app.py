@@ -110,6 +110,7 @@ if st.button("Run PR Review"):
         with col2:
             st.markdown("### 🛠️ Suggested Auto-Fix")
             
+            # ---> STRICT LINE-BY-LINE GUARDRAIL <---
             original_lines = file_data['content'].splitlines()
             ai_lines = result["source_code"].splitlines()
             
@@ -118,8 +119,11 @@ if st.button("Run PR Review"):
             
             for tag, i1, i2, j1, j2 in matcher.get_opcodes():
                 if tag != 'equal':
-                    block_overlaps_pr = any(line_num in pr_allowed_lines for line_num in range(i1 + 1, i2 + 2))
-                    if block_overlaps_pr:
+                    # Get the exact line numbers the AI tried to change
+                    altered_lines = set(range(i1 + 1, i2 + 2))
+                    
+                    # ONLY allow the change if EVERY altered line is inside the PR map
+                    if altered_lines.issubset(pr_allowed_lines):
                         safe_final_lines[i1:i2] = ai_lines[j1:j2]
 
             diff = list(difflib.unified_diff(original_lines, safe_final_lines, lineterm="", n=2))
