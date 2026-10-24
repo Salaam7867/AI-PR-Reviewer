@@ -77,20 +77,17 @@ if st.button("Run PR Review"):
         with col2:
             st.markdown("### 🛠️ Suggested Auto-Fix")
             
-            # ---> NEW DIFFLIB LOGIC <---
+# ---> CLEANER DIFFLIB LOGIC <---
             original_lines = file_data['content'].splitlines()
             ai_fixed_lines = result["source_code"].splitlines()
 
-            # Ask Python to find exactly what the AI changed
-            diff = list(difflib.unified_diff(original_lines, ai_fixed_lines, n=0))
+            # Generate a standard unified diff with 2 lines of context
+            diff = list(difflib.unified_diff(original_lines, ai_fixed_lines, lineterm="", n=2))
 
             if diff:
-                # Extract only the newly added lines and wrap them in a GitHub suggestion block
-                ai_new_lines = [line[1:] for line in diff if line.startswith('+') and not line.startswith('+++')]
-                
-                suggestion_comment = "```suggestion\n" + "\n".join(ai_new_lines) + "\n```"
-                
-                st.markdown("### 🚀 GitHub PR Comment Ready:")
-                st.code(suggestion_comment, language="markdown")
+                st.markdown("### 🚀 Proposed Code Changes:")
+                # Join the diff into a single string and display as standard git diff
+                diff_text = "\n".join(diff)
+                st.code(diff_text, language="diff")
             else:
                 st.success("No code changes were necessary!")
