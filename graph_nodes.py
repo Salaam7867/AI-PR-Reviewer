@@ -30,7 +30,13 @@ def safe_gemini_call(prompt: str, is_json: bool = False) -> str:
         config.response_mime_type = "application/json"
         
     model = genai.GenerativeModel('gemini-3.8-flash')
-    response = model.generate_content(prompt, generation_config=config)
+    
+    # Add the request_options timeout to force a retry if the network hangs
+    response = model.generate_content(
+        prompt, 
+        generation_config=config,
+        request_options={"timeout": 45} 
+    )
     return response.text
 
 def get_modified_lines(git_diff: str) -> set:
