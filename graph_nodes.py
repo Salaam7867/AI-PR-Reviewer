@@ -1,5 +1,6 @@
 
 import os
+import re
 from pathlib import Path
 import tempfile
 from dotenv import load_dotenv
@@ -20,6 +21,49 @@ if not api_key:
 client = Groq(api_key=api_key)
 
 
+def get_modified_lines(git_diff: str) -> set:
+    """Parses a git diff patch and returns a set of newly added/modified line numbers."""
+    modified_lines = set()
+    if not git_diff or git_diff == "No diff available.":
+        return modified_lines
+        
+    current_line = 0
+    for line in git_diff.splitlines():
+        if line.startswith("@@"):
+            # Extract the starting line number for the new file chunk (e.g., @@ -10,5 +15,6 @@)
+            match = re.search(r"\+(\d+)", line)
+            if match:
+                current_line = int(match.group(1))
+        elif line.startswith("+++") or line.startswith("---"):
+            continue
+        elif line.startswith("+"):
+            # This is a new/modified line in the PR
+            modified_lines.add(current_line)
+            current_line += 1
+        elif line.startswith(" "):
+            # This is an unchanged context line
+            current_line += 1
+            
+    return modified_lines
+
+
+def filter_lint_report(lint_report: str, modified_lines: set) -> str:
+    """Filters the Flake8 report to only include errors on modified lines."""
+    if not modified_lines:
+        return "No issues found in the PR diff."
+        
+    filtered_errors = []
+    for issue in lint_report.strip().splitlines():
+        # Flake8 outputs errors in the format: filename.py:LINE:COL: ERROR_CODE details
+        match = re.search(r":(\d+):", issue)
+        if match:
+            line_num = int(match.group(1))
+            if line_num in modified_lines:
+                filtered_errors.append(issue)
+                
+    return "\n".join(filtered_errors) if filtered_errors else "No issues found in the PR diff."
+
+
 def linter_node(state: ReviewState) -> dict:
     source_code = state["source_code"]
 
@@ -37,7 +81,18 @@ def linter_node(state: ReviewState) -> dict:
     finally:
         Path(temp_path).unlink(missing_ok=True)
 
-    return {"lint_report": lint_report}
+    git_diff = state.get("git_diff", "")
+    
+    # ... (your existing tempfile and run_linter logic stays the same) ...
+
+    # Parse the diff to find which lines the PR actually changed
+    modified_lines = get_modified_lines(git_diff)
+    
+    # Filter the linter report so we only complain about the PR's lines
+    targeted_lint_report = filter_lint_report(lint_report, modified_lines)
+
+    return {"lint_report": targeted_lint_report}
+
 
 
 
@@ -112,16 +167,12 @@ def fixer_node(state: ReviewState) -> dict:
 
     Revise the provided Python source code using the review findings.
 
-    Rules:
-    - Return the complete revised Python source code only.
-    - Do not return Markdown fences or explanations.
-    - Make minimal changes that address valid findings.
-    - Preserve the program's intended behavior.
-    - Do not implement ambiguous behavior changes without justification.
-    - Do not make unrelated refactors.
-    - If a finding is only a potential risk and its correct behavior is
-    unclear, leave it unchanged.
-    - Preserve existing functionality and imports unless a change is needed.
+    CRITICAL RULES:
+    1. You MUST return the ENTIRE, complete Python source code from start to finish.
+    2. DO NOT use placeholders like "# ... rest of code unchanged ...".
+    3. DO NOT omit any imports, classes, or functions. The output must be a fully functional, complete file.
+    4. Only modify the specific lines required to address the valid findings in the JSON.
+    5. Return ONLY the raw Python code. No markdown fences, no explanations.
 
     REVIEW FINDINGS:
     {review_json}

@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import difflib  # <-- Added here
 from dotenv import load_dotenv
 from github_service import fetch_pr_python_files
 from graph import graph
@@ -41,10 +42,8 @@ if st.button("Run PR Review"):
         st.subheader(f"Reviewing: `{file_data['filename']}`")
         
         source_code = file_data['content']
-        git_diff = file_data['patch'] or "No diff available." # Failsafe if patch is empty
+        git_diff = file_data['patch'] or "No diff available." 
         
-        # ---> THIS IS EXACTLY WHERE UPDATE 2 HAPPENS <---
-        # We build the starting state and include the git_diff
         initial_state = {
             "file_path": file_data['filename'],
             "original_source_code": source_code,
@@ -58,7 +57,6 @@ if st.button("Run PR Review"):
         }
 
         with st.status(f"Running Agent Loop on {file_data['filename']}...", expanded=True) as status:
-            # 3. Trigger your LangGraph agent
             st.write("Executing Linter & LLM Review...")
             result = graph.invoke(initial_state)
             status.update(label="Review Complete!", state="complete", expanded=False)
@@ -78,7 +76,21 @@ if st.button("Run PR Review"):
 
         with col2:
             st.markdown("### 🛠️ Suggested Auto-Fix")
-            if result.get("source_code") != file_data["content"]:
-                st.code(result["source_code"], language="python")
+            
+            # ---> NEW DIFFLIB LOGIC <---
+            original_lines = file_data['content'].splitlines()
+            ai_fixed_lines = result["source_code"].splitlines()
+
+            # Ask Python to find exactly what the AI changed
+            diff = list(difflib.unified_diff(original_lines, ai_fixed_lines, n=0))
+
+            if diff:
+                # Extract only the newly added lines and wrap them in a GitHub suggestion block
+                ai_new_lines = [line[1:] for line in diff if line.startswith('+') and not line.startswith('+++')]
+                
+                suggestion_comment = "```suggestion\n" + "\n".join(ai_new_lines) + "\n```"
+                
+                st.markdown("### 🚀 GitHub PR Comment Ready:")
+                st.code(suggestion_comment, language="markdown")
             else:
                 st.success("No code changes were necessary!")
