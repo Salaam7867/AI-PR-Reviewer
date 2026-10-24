@@ -21,8 +21,8 @@ if not api_key:
 
 @retry(
     retry=retry_if_exception_type(Exception),
-    wait=wait_exponential(multiplier=2, min=2, max=30),
-    stop=stop_after_attempt(5)
+    wait=wait_exponential(multiplier=2, min=4, max=60), # Wait 4s, 8s, 16s, up to 60s
+    stop=stop_after_attempt(10) # Give Google 10 chances to respond
 )
 def safe_gemini_call(prompt: str, is_json: bool = False) -> str:
     # The new SDK uses a centralized Client object
