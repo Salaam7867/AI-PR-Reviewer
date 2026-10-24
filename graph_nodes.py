@@ -35,7 +35,7 @@ def safe_gemini_call(prompt: str, is_json: bool = False) -> str:
         
     # generate_content is now called through client.models
     response = client.models.generate_content(
-        model='gemini-3.5-flash', 
+        model='gemini-2.5-flash', 
         contents=prompt,
         config=config
     )
