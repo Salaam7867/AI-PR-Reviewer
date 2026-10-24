@@ -4,7 +4,8 @@ import ast
 from pathlib import Path
 import tempfile
 from dotenv import load_dotenv
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 from graph_state import ReviewState
@@ -25,20 +26,21 @@ genai.configure(api_key=api_key)
     stop=stop_after_attempt(5)
 )
 def safe_gemini_call(prompt: str, is_json: bool = False) -> str:
-    config = genai.GenerationConfig(temperature=0.1)
+    # The new SDK uses a centralized Client object
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    
+    # Configuration is now handled via types.GenerateContentConfig
+    config = types.GenerateContentConfig(temperature=0.1)
     if is_json:
         config.response_mime_type = "application/json"
         
-    model = genai.GenerativeModel('gemini-3.8-flash')
-    
-    # Add the request_options timeout to force a retry if the network hangs
-    response = model.generate_content(
-        prompt, 
-        generation_config=config,
-        request_options={"timeout": 45} 
+    # generate_content is now called through client.models
+    response = client.models.generate_content(
+        model='gemini-3.5-flash', 
+        contents=prompt,
+        config=config
     )
     return response.text
-
 def get_modified_lines(git_diff: str) -> set:
     modified_lines = set()
     if not git_diff or git_diff == "No diff available.":
