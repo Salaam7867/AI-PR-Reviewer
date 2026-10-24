@@ -125,7 +125,7 @@ def reviewer_node(state: ReviewState) -> dict:
         """
 
     response = client.chat.completions.create(
-        model="gpt-oss-120b", # Note: gpt-oss-120b will throw an error on Groq
+        model="openai/gpt-oss-120b", # Note: gpt-oss-120b will throw an error on Groq
         messages=[
             {
                 "role": "system",
