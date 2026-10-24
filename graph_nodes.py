@@ -163,23 +163,23 @@ def fixer_node(state: ReviewState) -> dict:
     review_json = ai_review.model_dump_json(indent=2)
 
     prompt = f"""
-    You are a careful Python code repair agent.
-
-    Revise the provided Python source code using the review findings.
-
-    CRITICAL RULES:
-    1. You MUST return the ENTIRE, complete Python source code from start to finish.
-    2. DO NOT use placeholders like "# ... rest of code unchanged ...".
-    3. DO NOT omit any imports, classes, or functions. The output must be a fully functional, complete file.
-    4. Only modify the specific lines required to address the valid findings in the JSON.
-    5. Return ONLY the raw Python code. No markdown fences, no explanations.
-
-    REVIEW FINDINGS:
-    {review_json}
-
-    CURRENT PYTHON SOURCE:
-    {source_code}
-    """
+        You are a careful Python code repair agent.
+    
+        Revise the provided Python source code using the review findings.
+    
+        CRITICAL RULES:
+        1. You MUST return the ENTIRE, complete Python source code from start to finish.
+        2. DO NOT use placeholders like "# ... rest of code unchanged ...".
+        3. DO NOT omit any imports, classes, or functions. The output must be a fully functional, complete file.
+        4. Only modify the specific lines required to address the valid findings in the JSON.
+        5. Return ONLY the raw Python code. No markdown fences, no explanations.
+    
+        REVIEW FINDINGS:
+        {review_json}
+    
+        CURRENT PYTHON SOURCE:
+        {source_code}
+        """
 
     response = client.chat.completions.create(
         model="openai/gpt-oss-120b",
