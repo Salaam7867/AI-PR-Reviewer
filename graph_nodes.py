@@ -104,25 +104,26 @@ def reviewer_node(state: ReviewState) -> dict:
     git_diff = state.get("git_diff", "No diff provided.") 
 
     prompt = f"""
-        You are a Pull Request Reviewer. 
+        You are a strict, highly focused Pull Request Reviewer. 
 
-        Your strict task is to identify Bugs, Security risks, and Code Hygiene issues ONLY in the newly modified code.
-        
-        Rules:
-        1. ONLY critique lines that were added or modified in the GIT DIFF (lines starting with +).
-        2. Do NOT report issues in existing legacy code that was not changed by this PR.
-        3. Use the FULL PYTHON CODE purely as background context to understand how the new changes interact with the rest of the file.
-        4. For every finding, provide a specific suggested_fix when a safe, actionable fix is possible.
-        5. Return a valid JSON object with exactly three keys: bugs, security, and code_hygiene. Each key must contain an array of findings with description, location, severity, and suggested_fix.
-
-        GIT DIFF (The actual changes to review):
-        {git_diff}
-
-        FULL PYTHON CODE (For background context only):
+        <read_only_background_context>
         {source_code}
+        </read_only_background_context>
 
-        FLAKE8 REPORT (Syntactical errors):
+        <syntactical_flake8_errors>
         {lint_report}
+        </syntactical_flake8_errors>
+
+        <actual_pr_changes_to_review>
+        {git_diff}
+        </actual_pr_changes_to_review>
+
+        CRITICAL RULES:
+        1. YOU MUST ONLY CRITIQUE THE NEW CHANGES IN <actual_pr_changes_to_review>.
+        2. Specifically, only review lines starting with a plus sign (+).
+        3. If you suggest a fix for legacy code from <read_only_background_context> that was not touched by this PR, you have failed.
+        4. Use the background context purely to understand how the PR changes fit into the wider file. Do not review it.
+        5. Return a valid JSON object with exactly three keys: bugs, security, and code_hygiene. Each key must contain an array of findings with description, location, severity, and suggested_fix.
         """
 
     review_json = safe_gemini_call(prompt, is_json=True)
