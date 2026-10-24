@@ -1,6 +1,7 @@
 import streamlit as st
 import os
-import difflib  # <-- Added here
+import difflib
+import re
 from dotenv import load_dotenv
 from github_service import fetch_pr_python_files
 from graph import graph
@@ -9,19 +10,36 @@ load_dotenv()
 
 st.set_page_config(page_title="AI PR Reviewer", layout="wide")
 
+def get_pr_modified_lines(patch: str) -> set:
+    """Calculates exactly which line numbers the original developer changed."""
+    modified = set()
+    if not patch or patch == "No diff available.":
+        return modified
+    current_line = 0
+    for line in patch.splitlines():
+        if line.startswith("@@"):
+            match = re.search(r"\+(\d+)", line)
+            if match:
+                current_line = int(match.group(1))
+        elif line.startswith("+++") or line.startswith("---"):
+            continue
+        elif line.startswith("+"):
+            modified.add(current_line)
+            current_line += 1
+        elif line.startswith(" "):
+            current_line += 1
+    return modified
+
 st.title("🤖 Agentic AI PR Reviewer")
 st.markdown("Paste a GitHub Pull Request URL to run the autonomous review and auto-fix loop.")
 
-# 1. User Input
 pr_url = st.text_input("GitHub PR URL", placeholder="https://github.com/username/repo/pull/1")
 
 if st.button("Run PR Review"):
     github_token = os.getenv("GITHUB_TOKEN")
-    
     if not github_token:
         st.error("Please add GITHUB_TOKEN to your .env file.")
         st.stop()
-        
     if not pr_url:
         st.warning("Please enter a valid PR URL.")
         st.stop()
@@ -37,12 +55,14 @@ if st.button("Run PR Review"):
         st.info("No Python files were modified in this PR.")
         st.stop()
 
-    # 2. Process each file through your LangGraph
     for file_data in changed_files:
         st.subheader(f"Reviewing: `{file_data['filename']}`")
         
         source_code = file_data['content']
         git_diff = file_data['patch'] or "No diff available." 
+        
+        # 1. Create the boundary map of what the PR actually touched
+        pr_allowed_lines = get_pr_modified_lines(git_diff)
         
         initial_state = {
             "file_path": file_data['filename'],
@@ -61,7 +81,6 @@ if st.button("Run PR Review"):
             result = graph.invoke(initial_state)
             status.update(label="Review Complete!", state="complete", expanded=False)
 
-        # 4. Display Results on the Streamlit UI
         col1, col2 = st.columns(2)
         
         with col1:
@@ -77,17 +96,32 @@ if st.button("Run PR Review"):
         with col2:
             st.markdown("### 🛠️ Suggested Auto-Fix")
             
-# ---> CLEANER DIFFLIB LOGIC <---
+            # ---> THE STRICT GUARDRAIL LOGIC <---
             original_lines = file_data['content'].splitlines()
-            ai_fixed_lines = result["source_code"].splitlines()
+            ai_lines = result["source_code"].splitlines()
+            
+            # We will build the FINAL safe file here
+            safe_final_lines = original_lines.copy()
+            
+            # Use SequenceMatcher to find exactly which blocks of code the AI altered
+            matcher = difflib.SequenceMatcher(None, original_lines, ai_lines)
+            
+            for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+                if tag != 'equal':
+                    # i1 to i2 is the original line range. 
+                    # If ANY line in this altered block was part of the PR, we accept the AI's fix.
+                    # Otherwise, we reject it because it's a rogue legacy formatting change.
+                    block_overlaps_pr = any(line_num in pr_allowed_lines for line_num in range(i1 + 1, i2 + 2))
+                    
+                    if block_overlaps_pr:
+                        safe_final_lines[i1:i2] = ai_lines[j1:j2]
 
-            # Generate a standard unified diff with 2 lines of context
-            diff = list(difflib.unified_diff(original_lines, ai_fixed_lines, lineterm="", n=2))
+            # Generate the unified diff strictly between the original file and our SAFE file
+            diff = list(difflib.unified_diff(original_lines, safe_final_lines, lineterm="", n=2))
 
             if diff:
-                st.markdown("### 🚀 Proposed Code Changes:")
-                # Join the diff into a single string and display as standard git diff
+                st.markdown("### 🚀 Guardrailed Code Changes (No Legacy Edits):")
                 diff_text = "\n".join(diff)
                 st.code(diff_text, language="diff")
             else:
-                st.success("No code changes were necessary!")
+                st.success("No in-scope code changes were necessary (ignored rogue formatting).")
