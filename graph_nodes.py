@@ -29,7 +29,7 @@ def safe_gemini_call(prompt: str, is_json: bool = False) -> str:
     if is_json:
         config.response_mime_type = "application/json"
         
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    model = genai.GenerativeModel('gemini-3.8-flash')
     response = model.generate_content(prompt, generation_config=config)
     return response.text
 
