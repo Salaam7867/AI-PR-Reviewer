@@ -4,4 +4,5 @@ groq
 langgraph
 langchain-core
 pydantic
+tenacity
 PyGithub

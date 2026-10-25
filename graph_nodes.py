@@ -9,7 +9,6 @@ from groq import Groq
 import logging
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception, before_sleep_log
 
-from google.genai.errors import APIError
 
 from graph_state import ReviewState
 from linter_tool import run_linter
