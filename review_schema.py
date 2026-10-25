@@ -1,5 +1,5 @@
-from typing import Literal
-from pydantic import BaseModel, field_validator
+from typing import Literal, List
+from pydantic import BaseModel, Field, field_validator
 
 class ReviewFinding(BaseModel):
     description: str
@@ -34,6 +34,6 @@ class ReviewFinding(BaseModel):
 
 
 class CodeReview(BaseModel):
-    bugs: list[ReviewFinding]
-    security: list[ReviewFinding]
-    code_hygiene: list[ReviewFinding]
+    bugs: List[ReviewFinding] = Field(default_factory=list)
+    security: List[ReviewFinding] = Field(default_factory=list)
+    code_hygiene: List[ReviewFinding] = Field(default_factory=list)
