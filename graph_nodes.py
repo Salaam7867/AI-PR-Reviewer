@@ -51,7 +51,7 @@ def safe_groq_call(prompt: str, is_json: bool = False) -> str:
         prompt += "\n\nCRITICAL: You must return valid JSON."
 
     completion = client.chat.completions.create(
-        model="llama-3.1-70b-versatile", # FIX: Upgraded from 8k to 128k context window
+        model="openai/gpt-oss-120b", # FIX: Upgraded from 8k to 128k context window
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
         response_format={"type": "json_object"} if is_json else None
