@@ -1,11 +1,13 @@
+import concurrent.futures
 import streamlit as st
 import os
 import difflib
 import re
-import concurrent.futures
 from dotenv import load_dotenv
-from github_service import fetch_pr_python_files
+from github_service import fetch_pr_python_files, post_review_to_github
 from graph import graph
+# If you implemented the GitHub posting script earlier, import it here:
+# from github_service import post_review_to_github
 
 load_dotenv()
 
@@ -56,7 +58,7 @@ def process_file_agent(file_data: dict) -> tuple:
 
 
 st.title("🤖 Agentic AI PR Reviewer")
-st.markdown("Paste a GitHub Pull Request URL to run the autonomous review and auto-fix loop concurrently.")
+st.markdown("Paste a GitHub Pull Request URL to run the autonomous review and auto-fix loop.")
 
 pr_url = st.text_input("GitHub PR URL", placeholder="https://github.com/username/repo/pull/1")
 
@@ -80,15 +82,24 @@ if st.button("Run PR Review"):
         st.info("No Python files were modified in this PR.")
         st.stop()
 
-    # --- PARALLEL EXECUTION PHASE ---
-    with st.status(f"Spawning {len(changed_files)} agents concurrently...", expanded=True) as status:
-        st.write("Executing Linter & LLM Reviews in parallel...")
-        
-        # ThreadPoolExecutor launches a thread for every file simultaneously
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            completed_results = list(executor.map(process_file_agent, changed_files))
+    # --- SEQUENTIAL EXECUTION PHASE (Rate-Limit Safe) ---
+    completed_results = []
+    
+    with st.status(f"Processing {len(changed_files)} files sequentially...", expanded=True) as status:
+        for file in changed_files:
+            try:
+                st.write(f"🕵️ Agent reviewing `{file['filename']}`...")
+                result_tuple = process_file_agent(file)
+                completed_results.append(result_tuple)
+            except Exception as e:
+                error_msg = str(e)
+                if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "quota" in error_msg.lower():
+                    st.error(f"⚠️ API Quota Exhausted on `{file['filename']}`. The AI reached its daily request limit. Halting further file reviews to preserve results.")
+                    break # Stop processing, but keep what we have
+                else:
+                    st.error(f"❌ Error processing `{file['filename']}`: {error_msg}")
             
-        status.update(label="All Concurrent Reviews Complete!", state="complete", expanded=False)
+        status.update(label="Review Execution Complete!", state="complete", expanded=False)
 
     # --- SEQUENTIAL UI RENDERING PHASE ---
     for file_data, result, pr_allowed_lines in completed_results:
@@ -134,3 +145,26 @@ if st.button("Run PR Review"):
                 st.code(diff_text, language="diff")
             else:
                 st.success("No in-scope code changes were necessary (ignored rogue formatting).")
+                
+# --- GITHUB POSTING PHASE ---
+    if completed_results:
+        st.divider()
+        with st.spinner("Posting final report to GitHub..."):
+            try:
+                # Extract repo_name and pr_number from "https://github.com/owner/repo/pull/1"
+                # Split by '/' and grab the relevant parts from the end of the URL
+                url_parts = pr_url.rstrip('/').split('/')
+                pr_number = int(url_parts[-1])
+                repo_name = f"{url_parts[-4]}/{url_parts[-3]}"
+                
+                # Extract just the LangGraph state dictionaries from the completed_results tuple
+                ai_results = [res[1] for res in completed_results]
+                
+                # Call your PyGithub script
+                post_review_to_github(repo_name, pr_number, ai_results, github_token)
+                st.success(f"✅ Successfully posted the agentic review to PR #{pr_number}!")
+                
+            except IndexError:
+                st.error("❌ Could not parse the GitHub URL. Please ensure it looks like: https://github.com/owner/repo/pull/1")
+            except Exception as e:
+                st.error(f"❌ Failed to post review to GitHub: {e}")
