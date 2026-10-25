@@ -112,10 +112,84 @@ def linter_node(state: ReviewState) -> dict:
 
     return {"lint_report": targeted_lint_report}
 
-def reviewer_node(state: ReviewState) -> dict:
+def filter_out_of_scope_findings(
+    findings: list,
+    valid_lines: set[int]
+) -> list:
+    """Keep findings only when their location identifies a valid changed line."""
+    valid_findings = []
+
+    for finding in findings:
+        location = finding.location.strip()
+
+        # Accept explicit formats such as "Line 37" or "file.py:37"
+        match = re.search(
+            r"(?:\bline\s+|:(\d+)\b)",
+            location,
+            re.IGNORECASE
+        )
+
+        if not match:
+            # Do not silently accept an ambiguous location.
+            print(
+                f"Guardrail: Dropped finding with ambiguous location: "
+                f"{location!r}"
+            )
+            continue
+
+        line_num = int(
+            match.group(1) if match.group(1) else
+            re.search(r"\bline\s+(\d+)", location, re.IGNORECASE).group(1)
+        )
+
+        if line_num in valid_lines:
+            valid_findings.append(finding)
+        else:
+            print(
+                f"Guardrail: Dropped out-of-scope finding at line {line_num}"
+            )
+
+    return valid_findings
+
+def get_valid_changed_lines(git_diff: str) -> set[int]:
+    """Return line numbers added or modified in the new file."""
+    valid_lines = set()
+    current_line_num = -1
+
+    for line in git_diff.splitlines():
+        if line.startswith("@@"):
+            match = re.search(r"\+(\d+)", line)
+            current_line_num = int(match.group(1)) if match else -1
+
+        elif line.startswith(("+++", "---")):
+            continue
+
+        elif line.startswith("+"):
+            if current_line_num != -1:
+                valid_lines.add(current_line_num)
+                current_line_num += 1
+
+        elif line.startswith("-"):
+            continue
+
+        elif current_line_num != -1:
+            current_line_num += 1
+
+    return valid_lines
+
+def reviewer_node(state: dict) -> dict:
     source_code = state["source_code"]
+    git_diff = state["git_diff"]
     lint_report = state["lint_report"]
-    git_diff = state.get("git_diff", "No diff provided.") 
+
+    # Extract only the added lines using splitlines() to create a strict focus filter
+    added_lines = "\n".join([
+        line for line in git_diff.splitlines() 
+        if line.startswith('+') and not line.startswith('+++')
+    ])
+    
+    if not added_lines.strip():
+        added_lines = ""
 
     prompt = f"""
         You are a strict, highly focused Pull Request Reviewer. 
@@ -132,19 +206,43 @@ def reviewer_node(state: ReviewState) -> dict:
         {git_diff}
         </actual_pr_changes_to_review>
 
+        <strictly_added_lines>
+        {added_lines}
+        </strictly_added_lines>
+
         CRITICAL RULES:
-        1. YOU MUST ONLY CRITIQUE THE NEW CHANGES IN <actual_pr_changes_to_review>.
-        2. Specifically, only review lines starting with a plus sign (+).
-        3. If you suggest a fix for legacy code from <read_only_background_context> that was not touched by this PR, you have failed.
-        4. Use the background context purely to understand how the PR changes fit into the wider file. Do not review it.
-        5. Return a valid JSON object with exactly three keys: bugs, security, and code_hygiene. Each key must contain an array of findings with description, location, severity, and suggested_fix.
+        1. Report findings only when the defect is demonstrably caused by, or introduced by, the changed code. 
+        2. Use the complete <actual_pr_changes_to_review> diff to understand modifications and extract accurate line numbers from the hunk headers (e.g., @@ -10,2 +10,3 @@).
+        3. Ignore unrelated pre-existing defects in the <read_only_background_context>. 
+        4. A finding's location MUST refer to a valid added or modified line in the new version of the file.
+        5. If <strictly_added_lines> is empty, inspect the full diff for deletions that may introduce bugs or security vulnerabilities. Report a finding only if it can be anchored to a valid added or modified line in the new file. If a deletion-only change introduces a potential defect but cannot be anchored to a valid new-file line, do not invent a line number or force it into the findings; leave it for manual review.
+        6. Return a valid JSON object with exactly three keys: bugs, security, and code_hygiene. Each finding must include description, location, severity, and suggested_fix. If no safe fix can be provided, leave suggested_fix null or empty.
         """
+    
+    # ... keep your existing try/except block for safe_gemini_call and Pydantic parsing below this
 
     review_json = safe_gemini_call(prompt, is_json=True)
+
     if not review_json:
-        raise ValueError("Gemini returned an empty review. Halting pipeline to prevent false passes.")
+        raise ValueError(
+            "Gemini returned an empty review. Halting pipeline "
+            "to prevent false passes."
+        )
 
     validated_review = CodeReview.model_validate_json(review_json)
+
+    valid_lines_set = get_valid_changed_lines(git_diff)
+
+    validated_review.bugs = filter_out_of_scope_findings(
+        validated_review.bugs, valid_lines_set
+    )
+    validated_review.security = filter_out_of_scope_findings(
+        validated_review.security, valid_lines_set
+    )
+    validated_review.code_hygiene = filter_out_of_scope_findings(
+        validated_review.code_hygiene, valid_lines_set
+    )
+
     return {"ai_review": validated_review}
 
 def fixer_node(state: ReviewState) -> dict:
