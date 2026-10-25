@@ -145,15 +145,17 @@ if st.button("Run PR Review"):
                 st.code(diff_text, language="diff")
             else:
                 st.success("No in-scope code changes were necessary (ignored rogue formatting).")
-                
-# --- GITHUB POSTING PHASE ---
+ 
+
+ # --- GITHUB POSTING PHASE ---
     if completed_results:
         st.divider()
         with st.spinner("Posting final report to GitHub..."):
             try:
-                # Extract repo_name and pr_number from "https://github.com/owner/repo/pull/1"
-                # Split by '/' and grab the relevant parts from the end of the URL
-                url_parts = pr_url.rstrip('/').split('/')
+                # Strip out any tracking parameters like ?utm_source=...
+                clean_url = pr_url.split('?')[0].rstrip('/')
+                url_parts = clean_url.split('/')
+                
                 pr_number = int(url_parts[-1])
                 repo_name = f"{url_parts[-4]}/{url_parts[-3]}"
                 
@@ -164,7 +166,7 @@ if st.button("Run PR Review"):
                 post_review_to_github(repo_name, pr_number, ai_results, github_token)
                 st.success(f"✅ Successfully posted the agentic review to PR #{pr_number}!")
                 
-            except IndexError:
+            except (IndexError, ValueError):
                 st.error("❌ Could not parse the GitHub URL. Please ensure it looks like: https://github.com/owner/repo/pull/1")
             except Exception as e:
                 st.error(f"❌ Failed to post review to GitHub: {e}")
