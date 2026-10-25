@@ -5,8 +5,7 @@ import difflib
 from pathlib import Path
 import tempfile
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
+from groq import Groq
 import logging
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception, before_sleep_log
 
@@ -25,36 +24,40 @@ if not api_key:
 
 # Setup the logger so tenacity knows where to print the errors
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("GeminiRetry")
+logger = logging.getLogger("GroqRetry")
 
 def is_transient_error(exception):
-    # If it's a Google API error and the code is 429 (Quota), DO NOT retry.
-    if isinstance(exception, APIError) and exception.code == 429:
-        return False
-    return True # Retry everything else
+    error_str = str(exception).lower()
+    # Groq's Tokens-Per-Minute (TPM) limits reset very quickly, so we aggressively retry them
+    if "429" in error_str or "rate limit" in error_str:
+        return True 
+    return True 
 
 @retry(
     retry=retry_if_exception(is_transient_error),
     wait=wait_exponential(multiplier=2, min=2, max=10),
-    stop=stop_after_attempt(3),
+    stop=stop_after_attempt(4),
     before_sleep=before_sleep_log(logger, logging.WARNING)
 )
-def safe_gemini_call(prompt: str, is_json: bool = False) -> str:
-    # The new SDK uses a centralized Client object
-    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-    
-    # Configuration is now handled via types.GenerateContentConfig
-    config = types.GenerateContentConfig(temperature=0.1)
-    if is_json:
-        config.response_mime_type = "application/json"
+def safe_groq_call(prompt: str, is_json: bool = False) -> str:
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY is missing from .env")
         
-    # generate_content is now called through client.models
-    response = client.models.generate_content(
-        model='gemini-3.8-flash', 
-        contents=prompt,
-        config=config
+    client = Groq(api_key=api_key)
+    
+    # Groq strictly requires the word "JSON" in the prompt when forcing JSON mode
+    if is_json and "json" not in prompt.lower():
+        prompt += "\n\nCRITICAL: You must return valid JSON."
+
+    completion = client.chat.completions.create(
+        model="llama3-70b-8192", 
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.1,
+        response_format={"type": "json_object"} if is_json else None
     )
-    return response.text
+    
+    return completion.choices[0].message.content
 def get_modified_lines(git_diff: str) -> set:
     modified_lines = set()
     if not git_diff or git_diff == "No diff available.":
@@ -220,13 +223,13 @@ def reviewer_node(state: dict) -> dict:
         6. Return a valid JSON object with exactly three keys: bugs, security, and code_hygiene. Each finding must include description, location, severity, and suggested_fix. If no safe fix can be provided, leave suggested_fix null or empty.
         """
     
-    # ... keep your existing try/except block for safe_gemini_call and Pydantic parsing below this
+    # ... keep your existing try/except block for safe_groq_call and Pydantic parsing below this
 
-    review_json = safe_gemini_call(prompt, is_json=True)
+    review_json = safe_groq_call(prompt, is_json=True)
 
     if not review_json:
         raise ValueError(
-            "Gemini returned an empty review. Halting pipeline "
+            "Groq returned an empty review. Halting pipeline "
             "to prevent false passes."
         )
 
@@ -307,7 +310,7 @@ def fixer_node(state: ReviewState) -> dict:
         """
 
     try:
-        fixed_code = safe_gemini_call(prompt, is_json=False)
+        fixed_code = safe_groq_call(prompt, is_json=False)
         
         if fixed_code.startswith("```python"):
             fixed_code = fixed_code[9:]
