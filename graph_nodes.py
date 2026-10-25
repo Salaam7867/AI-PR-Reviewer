@@ -17,10 +17,9 @@ from review_schema import CodeReview
 from dotenv import load_dotenv
 load_dotenv(override=True) # Forces Python to read the new key from the file
 
-api_key = os.getenv("GEMINI_API_KEY")
+api_key = os.getenv("GROQ_API_KEY")
 if not api_key:
-    raise ValueError("GEMINI_API_KEY is missing from .env")
-
+    raise ValueError("GROQ_API_KEY is missing from environment variables")
 # Setup the logger so tenacity knows where to print the errors
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("GroqRetry")
@@ -42,7 +41,7 @@ def is_transient_error(exception):
 def safe_groq_call(prompt: str, is_json: bool = False) -> str:
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        raise ValueError("GROQ_API_KEY is missing from .env")
+        raise ValueError("GROQ_API_KEY is missing from environment variables")
         
     client = Groq(api_key=api_key)
     
