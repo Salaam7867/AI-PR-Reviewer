@@ -1,6 +1,7 @@
 import os
 import re
 import ast
+import difflib
 from pathlib import Path
 import tempfile
 from dotenv import load_dotenv
@@ -214,7 +215,7 @@ def reviewer_node(state: dict) -> dict:
         1. Report findings only when the defect is demonstrably caused by, or introduced by, the changed code. 
         2. Use the complete <actual_pr_changes_to_review> diff to understand modifications and extract accurate line numbers from the hunk headers (e.g., @@ -10,2 +10,3 @@).
         3. Ignore unrelated pre-existing defects in the <read_only_background_context>. 
-        4. A finding's location MUST refer to a valid added or modified line in the new version of the file.
+        4. A finding's location MUST refer to a valid added or modified line in the new version of the file, formatted strictly as either "Line X" or "filename.py:X". Do not use ambiguous descriptions.
         5. If <strictly_added_lines> is empty, inspect the full diff for deletions that may introduce bugs or security vulnerabilities. Report a finding only if it can be anchored to a valid added or modified line in the new file. If a deletion-only change introduces a potential defect but cannot be anchored to a valid new-file line, do not invent a line number or force it into the findings; leave it for manual review.
         6. Return a valid JSON object with exactly three keys: bugs, security, and code_hygiene. Each finding must include description, location, severity, and suggested_fix. If no safe fix can be provided, leave suggested_fix null or empty.
         """
@@ -245,9 +246,41 @@ def reviewer_node(state: dict) -> dict:
 
     return {"ai_review": validated_review}
 
+
+def is_fix_in_scope(original_code: str, fixed_code: str, valid_lines: set[int]) -> bool:
+    """
+    Ensures the AI's proposed fix only modifies code strictly at or adjacent to the original PR changes.
+    """
+    if not valid_lines:
+        print("🛡️ Guardrail: Rejected. No valid lines provided (fail closed).")
+        return False 
+        
+    matcher = difflib.SequenceMatcher(None, original_code.splitlines(), fixed_code.splitlines())
+    
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != 'equal':
+            if tag == 'insert':
+                # difflib uses 0-based indexing; i1 + 1 is the 1-based line number where code is inserted
+                insertion_point = i1 + 1
+                
+                # An insertion is only valid if it occurs exactly at or adjacent to a PR-modified line
+                if not any(abs(insertion_point - v) <= 1 for v in valid_lines):
+                    print(f"🛡️ Guardrail Blocked: 'insert' operation at line {insertion_point} is out of scope.")
+                    return False
+            else:
+                # For replace and delete, EVERY modified line must be strictly within the valid_lines set
+                changed_lines = set(range(i1 + 1, i2 + 1))
+                if not changed_lines.issubset(valid_lines):
+                    out_of_bounds = changed_lines - valid_lines
+                    print(f"🛡️ Guardrail Blocked: '{tag}' operation modified out-of-scope lines {out_of_bounds}.")
+                    return False
+                    
+    return True
+
 def fixer_node(state: ReviewState) -> dict:
     source_code = state["source_code"]
     ai_review = state["ai_review"]
+    git_diff = state.get("git_diff", "") # ADD THIS LINE TO FETCH git_diff FROM STATE
 
     if not ai_review or not (ai_review.bugs or ai_review.security or ai_review.code_hygiene):
         return {"source_code": source_code, "fix_attempts": state["fix_attempts"]}
@@ -285,13 +318,19 @@ def fixer_node(state: ReviewState) -> dict:
 
         fixed_code = fixed_code.strip() + "\n"
         
-        # AST Validation: Ensure the AI didn't write broken Python syntax
+        # 🛡️ Guardrail 1: AST Validation
         try:
             ast.parse(fixed_code)
         except SyntaxError as e:
             print(f"AST Validation Failed: AI generated invalid Python syntax - {e}")
-            fixed_code = source_code # Revert to original if syntax is broken
+            return {"source_code": source_code, "fix_attempts": state["fix_attempts"] + 1}
             
+        # 🛡️ Guardrail 2: Scope Validation
+        valid_lines_set = get_valid_changed_lines(git_diff)
+        if not is_fix_in_scope(source_code, fixed_code, valid_lines_set):
+            print("Fix rejected: AI attempted to modify unrelated code.")
+            fixed_code = source_code
+
     except Exception as e:
         print(f"Error in Fixer Node: {e}")
         fixed_code = source_code
