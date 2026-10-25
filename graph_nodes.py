@@ -28,15 +28,16 @@ logger = logging.getLogger("GroqRetry")
 
 def is_transient_error(exception):
     error_str = str(exception).lower()
-    # Groq's Tokens-Per-Minute (TPM) limits reset very quickly, so we aggressively retry them
-    if "429" in error_str or "rate limit" in error_str:
+    # Only retry actual transient network issues or rate limits
+    if "429" in error_str or "rate limit" in error_str or "503" in error_str:
         return True 
-    return True 
+    return False # FIX: Immediately fail on permanent errors like 400 Bad Request
 
 @retry(
     retry=retry_if_exception(is_transient_error),
     wait=wait_exponential(multiplier=2, min=2, max=10),
     stop=stop_after_attempt(4),
+    reraise=True, # FIX: Strip the Tenacity wrapper and print the actual Groq error to Streamlit
     before_sleep=before_sleep_log(logger, logging.WARNING)
 )
 def safe_groq_call(prompt: str, is_json: bool = False) -> str:
@@ -46,18 +47,19 @@ def safe_groq_call(prompt: str, is_json: bool = False) -> str:
         
     client = Groq(api_key=api_key)
     
-    # Groq strictly requires the word "JSON" in the prompt when forcing JSON mode
     if is_json and "json" not in prompt.lower():
         prompt += "\n\nCRITICAL: You must return valid JSON."
 
     completion = client.chat.completions.create(
-        model="llama3-70b-8192", 
+        model="llama-3.1-70b-versatile", # FIX: Upgraded from 8k to 128k context window
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
         response_format={"type": "json_object"} if is_json else None
     )
     
     return completion.choices[0].message.content
+
+
 def get_modified_lines(git_diff: str) -> set:
     modified_lines = set()
     if not git_diff or git_diff == "No diff available.":
