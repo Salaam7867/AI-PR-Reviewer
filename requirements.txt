@@ -6,3 +6,4 @@ langchain-core
 pydantic
 tenacity
 PyGithub
+flake8
