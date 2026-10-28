@@ -1,28 +1,17 @@
-import difflib
+import os
+import unittest
 
-def is_fix_in_scope(original_code: str, fixed_code: str, valid_lines: set[int]) -> bool:
-    if not valid_lines:
-        return False 
-        
-    matcher = difflib.SequenceMatcher(None, original_code.splitlines(), fixed_code.splitlines())
-    
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag != 'equal':
-            if tag == 'insert':
-                insertion_point = i1 + 1
-                if not any(abs(insertion_point - v) <= 1 for v in valid_lines):
-                    print(f"🛡️ Guardrail Blocked: 'insert' operation at line {insertion_point} is out of scope.")
-                    return False
-            else:
-                changed_lines = set(range(i1 + 1, i2 + 1))
-                if not changed_lines.issubset(valid_lines):
-                    out_of_bounds = changed_lines - valid_lines
-                    print(f"🛡️ Guardrail Blocked: '{tag}' operation modified out-of-scope lines {out_of_bounds}.")
-                    return False
-    return True
+# Allow importing graph_nodes.py without a real API key.
+# These tests do not make Groq API calls.
+os.environ.setdefault("GROQ_API_KEY", "test-key")
 
-# Simplified Mock Data (8 lines total)
-original_source = """def hello():
+from graph_nodes import is_fix_in_scope
+
+
+class TestFixScope(unittest.TestCase):
+
+    def setUp(self):
+        self.original_code = """def hello():
     print("Hello")
 
 def calculate(a, b):
@@ -31,21 +20,129 @@ def calculate(a, b):
 def goodbye():
     print("Goodbye")"""
 
-# The PR diff says only line 5 was changed (return a / b)
-valid_pr_lines = {5} 
+    def test_legitimate_multiline_fix(self):
+        fixed_code = self.original_code.replace(
+            "    return a / b",
+            "    if b == 0:\n"
+            "        return 0\n"
+            "    return a / b"
+        )
 
-print("--- TEST 3: Legitimate Multi-Line Fix (False Negative Check) ---")
-# A real fix requires adding a zero-division check before the return statement.
-# This modifies line 5, but effectively inserts/replaces code that pushes into new lines.
-valid_multiline_fix = original_source.replace(
-    "    return a / b", 
-    "    if b == 0:\n        return 0\n    return a / b"
-)
-result = is_fix_in_scope(original_source, valid_multiline_fix, valid_pr_lines)
-print(f"Result: {'✅ Accepted' if result else '❌ Rejected'}\n")
+        self.assertTrue(
+            is_fix_in_scope(
+                self.original_code,
+                fixed_code,
+                {5}
+            )
+        )
 
-print("--- TEST 4: Unrelated Insertion at EOF (False Positive Check) ---")
-# Appending code to the very end of the file (Line 9)
-eof_insertion = original_source + "\n\nprint('EOF')"
-result = is_fix_in_scope(original_source, eof_insertion, valid_pr_lines)
-print(f"Result: {'✅ Accepted' if result else '❌ Rejected'}\n")
+    def test_reject_unrelated_insertion_at_eof(self):
+        fixed_code = (
+            self.original_code
+            + "\n\nprint('Unrelated change')"
+        )
+
+        self.assertFalse(
+            is_fix_in_scope(
+                self.original_code,
+                fixed_code,
+                {5}
+            )
+        )
+
+    def test_reject_unrelated_modification(self):
+        fixed_code = self.original_code.replace(
+            'print("Goodbye")',
+            'print("Modified unrelated code")'
+        )
+
+        self.assertFalse(
+            is_fix_in_scope(
+                self.original_code,
+                fixed_code,
+                {5}
+            )
+        )
+
+    def test_reject_when_no_changed_lines_exist(self):
+        self.assertFalse(
+            is_fix_in_scope(
+                self.original_code,
+                self.original_code,
+                set()
+            )
+        )
+
+
+    
+    def test_normal_one_line_repair_is_accepted(self):
+        original = (
+            "def calculate(value):\n"
+            "    result = value + 1\n"
+            "    return result\n"
+        )
+        fixed = (
+            "def calculate(value):\n"
+            "    result = value + 2\n"
+            "    return result\n"
+        )
+
+        self.assertTrue(is_fix_in_scope(original, fixed, {2}))
+
+    def test_legitimate_multiline_replacement_is_accepted(self):
+        original = (
+            "def calculate(value):\n"
+            "    result = value + 1\n"
+            "    return result\n"
+        )
+        fixed = (
+            "def calculate(value):\n"
+            "    if value is None:\n"
+            "        raise ValueError('value is required')\n"
+            "    result = value + 1\n"
+            "    return result\n"
+        )
+
+        self.assertTrue(is_fix_in_scope(original, fixed, {2}))
+
+    def test_unrelated_adjacent_insertion_is_rejected(self):
+        original = (
+            "def calculate(value):\n"
+            "    result = value + 1\n"
+            "    return result\n"
+        )
+        fixed = (
+            "def calculate(value):\n"
+            "    result = value + 1\n"
+            "    print('debug')\n"
+            "    return result\n"
+        )
+
+        self.assertFalse(is_fix_in_scope(original, fixed, {2}))
+
+    def test_distant_unrelated_modification_is_rejected(self):
+        original = (
+            "def calculate(value):\n"
+            "    result = value + 1\n"
+            "    return result\n"
+            "\n"
+            "def unrelated():\n"
+            "    return True\n"
+        )
+        fixed = (
+            "def calculate(value):\n"
+            "    result = value + 1\n"
+            "    return result\n"
+            "\n"
+            "def unrelated():\n"
+            "    return False\n"
+        )
+
+        self.assertFalse(is_fix_in_scope(original, fixed, {2}))
+
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+
+

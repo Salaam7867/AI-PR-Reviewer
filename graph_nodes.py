@@ -289,25 +289,71 @@ def fixer_node(state: ReviewState) -> dict:
         return {"source_code": source_code, "fix_attempts": state["fix_attempts"]}
 
     review_json = ai_review.model_dump_json(indent=2)
+    valid_lines_set = get_valid_changed_lines(git_diff)
 
     prompt = f"""
-        You are a careful Python code repair agent.
-    
-        Revise the provided Python source code using the review findings.
-    
-        CRITICAL RULES:
-        1. You MUST return the ENTIRE, complete Python source code from start to finish.
-        2. DO NOT use placeholders like "# ... rest of code unchanged ...".
-        3. DO NOT omit any imports, classes, or functions. The output must be a fully functional, complete file.
-        4. Only modify the specific lines required to address the valid findings in the JSON.
-        5. Return ONLY the raw Python code. No markdown fences, no explanations.
-    
-        REVIEW FINDINGS:
-        {review_json}
-    
-        CURRENT PYTHON SOURCE:
-        {source_code}
-        """
+You are a careful Python code repair agent working on a GitHub Pull Request (PR).
+
+Your task is to repair only the problems identified in the review findings.
+The goal is to fix the PR's reported issues without changing unrelated code.
+
+PR DIFF:
+{git_diff}
+
+PERMITTED LINE NUMBERS IN THE CURRENT PR FILE:
+{sorted(valid_lines_set)}
+
+CRITICAL RULES:
+
+1. COMPLETE FILE:
+   Return the entire Python source file from start to finish.
+   Preserve every import, class, function, comment, and other section
+   that does not need to change for the requested repair.
+   Never use placeholders or omit unchanged code.
+
+2. SCOPE POLICY:
+- Treat the permitted line numbers as the only authorised repair region.
+- Use the PR diff to understand the developer's changes.
+- Fix only the supplied findings that correspond to the permitted region.
+- Preserve all other code, including adjacent lines, exactly as provided.
+- Do not add separate statements, logging, helper functions, or validation
+  merely because they are near a permitted line.
+- A multi-line replacement is allowed only when the entire replacement
+  is an authorised repair of the permitted statement or block.
+- Do not modify any other function or unrelated statement.
+- If a finding cannot be fixed within the permitted region, do not
+  expand the scope yourself.
+
+3. INSERTIONS AND MULTI-LINE FIXES:
+   You may replace a permitted statement or code block with multiple
+   lines when those lines are necessary to resolve a supplied finding.
+   Do not add separate statements merely because they are adjacent to
+   a permitted line.
+   Do not modify another function or unrelated statement.
+   Preserve all unrelated source code exactly as provided.
+
+4. REVIEW FINDINGS:
+   Use the supplied findings as the authority for what needs fixing.
+   If a finding does not identify a clear, actionable problem, do not
+   invent a repair for it.
+   Do not make changes beyond what is needed to resolve the findings.
+
+5. PRESERVE BEHAVIOUR:
+   Preserve the existing behaviour of unrelated code.
+   Do not remove existing functionality or introduce unrelated changes.
+   Ensure the repaired code remains syntactically valid Python.
+
+6. OUTPUT:
+   Return ONLY the complete raw Python source code.
+   Do not include Markdown fences, explanations, or commentary.
+
+REVIEW FINDINGS (JSON):
+{review_json}
+
+CURRENT PYTHON SOURCE:
+{source_code}
+"""
+
 
     try:
         fixed_code = safe_groq_call(prompt, is_json=False)
@@ -329,7 +375,6 @@ def fixer_node(state: ReviewState) -> dict:
             return {"source_code": source_code, "fix_attempts": state["fix_attempts"] + 1}
             
         # 🛡️ Guardrail 2: Scope Validation
-        valid_lines_set = get_valid_changed_lines(git_diff)
         if not is_fix_in_scope(source_code, fixed_code, valid_lines_set):
             print("Fix rejected: AI attempted to modify unrelated code.")
             fixed_code = source_code
