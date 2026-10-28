@@ -293,106 +293,106 @@ def fixer_node(state: ReviewState) -> dict:
     valid_lines_set = get_valid_changed_lines(git_diff)
 
     prompt = f"""
-        You are a careful Python code repair agent working on a GitHub Pull Request (PR).
+            You are a careful Python code repair agent working on a GitHub Pull Request (PR).
 
-        Your task is to repair only the problems identified in the review findings.
-        The goal is to fix the PR's reported issues without changing unrelated code.
+            Your task is to repair only the problems identified in the review findings.
+            The goal is to fix the PR's reported issues without changing unrelated code.
 
-        PR DIFF:
-        {git_diff}
+            PR DIFF:
+            {git_diff}
 
-        PERMITTED LINE NUMBERS IN THE CURRENT PR FILE:
-        {sorted(valid_lines_set)}
+            PERMITTED LINE NUMBERS IN THE CURRENT PR FILE:
+            {sorted(valid_lines_set)}
 
-        CRITICAL RULES:
+            CRITICAL RULES:
 
-        1. COMPLETE FILE:
-           Return the entire Python source file from start to finish.
-           Preserve every import, class, function, comment, and other section
-           that does not need to change for the requested repair.
-           Never use placeholders or omit unchanged code.
+            1. COMPLETE FILE:
+               Return the entire Python source file from start to finish.
+               Preserve every import, class, function, comment, and other section
+               that does not need to change for the requested repair.
+               Never use placeholders or omit unchanged code.
 
-        2. SCOPE POLICY:
-        - Treat the permitted line numbers as the only authorised repair region.
-        - Use the PR diff to understand the developer's changes.
-        - Fix only the supplied findings that correspond to the permitted region.
-        - Preserve all other code, including adjacent lines, exactly as provided.
-        - Do not add separate statements, logging, helper functions, or validation
-          merely because they are near a permitted line.
-        - A multi-line replacement is allowed only when the entire replacement
-          is an authorised repair of the permitted statement or block.
-        - Do not modify any other function or unrelated statement.
-        - If a finding cannot be fixed within the permitted region, do not
-          expand the scope yourself.
+            2. SCOPE POLICY:
+            - Treat the permitted line numbers as the only authorised repair region.
+            - Use the PR diff to understand the developer's changes.
+            - Fix only the supplied findings that correspond to the permitted region.
+            - Preserve all other code, including adjacent lines, exactly as provided.
+            - Do not add separate statements, logging, helper functions, or validation
+              merely because they are near a permitted line.
+            - A multi-line replacement is allowed only when the entire replacement
+              is an authorised repair of the permitted statement or block.
+            - Do not modify any other function or unrelated statement.
+            - If a finding cannot be fixed within the permitted region, do not
+              expand the scope yourself.
 
-        3. INSERTIONS AND MULTI-LINE FIXES:
-           You may replace a permitted statement or code block with multiple
-           lines when those lines are necessary to resolve a supplied finding.
-           Do not add separate statements merely because they are adjacent to
-           a permitted line.
-           Do not modify another function or unrelated statement.
-           Preserve all unrelated source code exactly as provided.
+            3. INSERTIONS AND MULTI-LINE FIXES:
+               You may replace a permitted statement or code block with multiple
+               lines when those lines are necessary to resolve a supplied finding.
+               Do not add separate statements merely because they are adjacent to
+               a permitted line.
+               Do not modify another function or unrelated statement.
+               Preserve all unrelated source code exactly as provided.
 
-        4. REVIEW FINDINGS:
-           Use the supplied findings as the authority for what needs fixing.
-           If a finding does not identify a clear, actionable problem, do not
-           invent a repair for it.
-           Do not make changes beyond what is needed to resolve the findings.
+            4. REVIEW FINDINGS:
+               Use the supplied findings as the authority for what needs fixing.
+               If a finding does not identify a clear, actionable problem, do not
+               invent a repair for it.
+               Do not make changes beyond what is needed to resolve the findings.
 
-        5. PRESERVE BEHAVIOUR:
-           Preserve the existing behaviour of unrelated code.
-           Do not remove existing functionality or introduce unrelated changes.
-           Ensure the repaired code remains syntactically valid Python.
+            5. PRESERVE BEHAVIOUR:
+               Preserve the existing behaviour of unrelated code.
+               Do not remove existing functionality or introduce unrelated changes.
+               Ensure the repaired code remains syntactically valid Python.
 
-        6. OUTPUT:
-           Return ONLY the complete raw Python source code.
-           Do not include Markdown fences, explanations, or commentary.
-        7. REPAIR QUALITY AND CORRECTNESS:
+            6. OUTPUT:
+               Return ONLY the complete raw Python source code.
+               Do not include Markdown fences, explanations, or commentary.
+            7. REPAIR QUALITY AND CORRECTNESS:
 
-        - Correctness is mandatory. Do not merely produce code that passes
-        syntax validation; the repair must actually resolve the reported issue.
+            - Correctness is mandatory. Do not merely produce code that passes
+            syntax validation; the repair must actually resolve the reported issue.
 
-        - Understand the root cause of each supplied finding before modifying
-        the code. Make the smallest correct change that resolves the cause.
+            - Understand the root cause of each supplied finding before modifying
+            the code. Make the smallest correct change that resolves the cause.
 
-        - Use the surrounding code to understand the intended behaviour,
-        function contracts, data types, return values, error handling,
-        and existing design. Treat surrounding code as read-only context
-        unless a change is explicitly authorised.
+            - Use the surrounding code to understand the intended behaviour,
+            function contracts, data types, return values, error handling,
+            and existing design. Treat surrounding code as read-only context
+            unless a change is explicitly authorised.
 
-        - Preserve existing functionality and expected behaviour except where
-        a change is necessary to resolve the reported finding.
+            - Preserve existing functionality and expected behaviour except where
+            a change is necessary to resolve the reported finding.
 
-        - Handle relevant edge cases, boundary conditions, invalid inputs,
-        and failure paths associated with the reported issue.
+            - Handle relevant edge cases, boundary conditions, invalid inputs,
+            and failure paths associated with the reported issue.
 
-        - Follow Python best practices. Generate readable, maintainable code
-        consistent with the existing codebase's style and conventions.
+            - Follow Python best practices. Generate readable, maintainable code
+            consistent with the existing codebase's style and conventions.
 
-        - Avoid unnecessary complexity, duplicated logic, magic values,
-        broad exception handling, unsafe operations, and unnecessary
-        dependencies.
+            - Avoid unnecessary complexity, duplicated logic, magic values,
+            broad exception handling, unsafe operations, and unnecessary
+            dependencies.
 
-        - For security findings, remove the underlying vulnerability rather
-        than merely hiding the symptom. Do not introduce new security risks.
+            - For security findings, remove the underlying vulnerability rather
+            than merely hiding the symptom. Do not introduce new security risks.
 
-        - Do not claim that a repair is correct merely because it is
-        syntactically valid. Reason through how the repaired code behaves
-        for normal inputs, relevant edge cases, and failure conditions.
+            - Do not claim that a repair is correct merely because it is
+            syntactically valid. Reason through how the repaired code behaves
+            for normal inputs, relevant edge cases, and failure conditions.
 
-        - Do not invent requirements or modify behaviour unrelated to the
-        supplied findings.
+            - Do not invent requirements or modify behaviour unrelated to the
+            supplied findings.
 
-        - If a finding cannot be fixed confidently within the authorised
-        region, preserve the original code rather than inventing a risky
-        repair.
+            - If a finding cannot be fixed confidently within the authorised
+            region, preserve the original code rather than inventing a risky
+            repair.
 
-        REVIEW FINDINGS (JSON):
-        {review_json}
+            REVIEW FINDINGS (JSON):
+            {review_json}
 
-        CURRENT PYTHON SOURCE:
-        {source_code}
-        """
+            CURRENT PYTHON SOURCE:
+            {source_code}
+            """
 
     try:
         fixed_code = safe_groq_call(prompt, is_json=False)
@@ -418,9 +418,15 @@ def fixer_node(state: ReviewState) -> dict:
             print("Fix rejected: AI attempted to modify unrelated code.")
             fixed_code = source_code
 
+        else:
+            print("Fix accepted by scope guardrail.")
+
     except Exception as e:
         print(f"Error in Fixer Node: {e}")
         fixed_code = source_code
+
+    print("\n--- FIXER OUTPUT ---\n")
+    print(fixed_code)
 
     return {
         "source_code": fixed_code,
