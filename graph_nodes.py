@@ -266,8 +266,9 @@ def is_fix_in_scope(original_code: str, fixed_code: str, valid_lines: set[int]) 
                 # difflib uses 0-based indexing; i1 + 1 is the 1-based line number where code is inserted
                 insertion_point = i1 + 1
                 
-                # An insertion is only valid if it occurs exactly at or adjacent to a PR-modified line
-                if not any(abs(insertion_point - v) <= 1 for v in valid_lines):
+                # Insertions must be anchored exactly at a permitted line.
+                # Being merely adjacent to a permitted line is not sufficient.
+                if insertion_point not in valid_lines:
                     print(f"🛡️ Guardrail Blocked: 'insert' operation at line {insertion_point} is out of scope.")
                     return False
             else:
